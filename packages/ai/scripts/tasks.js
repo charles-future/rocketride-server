@@ -1,0 +1,124 @@
+// =============================================================================
+// MIT License
+// Copyright (c) 2026 Aparavi Software AG
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in
+// all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+// =============================================================================
+
+/**
+ * Build tasks for @rocketride/ai
+ * 
+ * Commands:
+ *   build - Sync AI modules to dist
+ *   test  - Run AI module tests
+ *   clean - Remove build artifacts
+ * 
+ * Note: Model server tests moved to packages/model_server/scripts/tasks.js
+ */
+const path = require('path');
+const {
+    execCommand, syncDir, formatSyncStats, DIST_ROOT
+} = require('../../../scripts/lib');
+
+const PACKAGE_DIR = path.join(__dirname, '..');
+const SRC_DIR = path.join(PACKAGE_DIR, 'src', 'ai');
+const TESTS_DIR = path.join(PACKAGE_DIR, 'tests');
+const SERVER_DIR = path.join(DIST_ROOT, 'server');
+const DIST_DIR = path.join(SERVER_DIR, 'ai');
+
+// Engine executable (built by build:server)
+const ENGINE = path.join(SERVER_DIR, 'engine');
+
+// ============================================================================
+// Action Factories
+// ============================================================================
+
+function makeSyncAiAction() {
+    return {
+        run: async (ctx, task) => {
+            task.output = 'Scanning for changes...';
+            const stats = await syncDir(SRC_DIR, DIST_DIR, { mirror: false, package: true });
+            task.output = formatSyncStats(stats);
+        }
+    };
+}
+
+
+
+function makeRunPytestAction(options = {}) {
+    return {
+        run: async (ctx, task) => {
+            const pytestArgs = ['-m', 'pytest', TESTS_DIR, '-v', '--rootdir', PACKAGE_DIR];
+            if (options.pytest) {
+                pytestArgs.push(...options.pytest);
+            }
+
+            await execCommand(ENGINE, pytestArgs, {
+                task,
+                cwd: SERVER_DIR
+            });
+        }
+    };
+}
+
+// ============================================================================
+// Module Export
+// ============================================================================
+
+module.exports = {
+    name: 'ai',
+    description: 'AI/ML Modules',
+
+    actions: [
+        // Internal actions
+        { name: 'ai:sync', action: makeSyncAiAction },
+        { name: 'ai:run-pytest', action: makeRunPytestAction },
+
+        // Public actions (have descriptions)
+        {
+            name: 'ai:build', action: () => ({
+                description: 'Build AI modules',
+                steps: ['server:build', 'ai:sync']
+            })
+        },
+        {
+            name: 'ai:test', action: () => ({
+                description: 'Test AI modules',
+                steps: [
+                    'ai:build',
+                    'ai:run-pytest'
+                ]
+            })
+        },
+        {
+            name: 'ai:clean', action: () => ({
+                description: 'Clean AI modules',
+                run: async (ctx, task) => {
+                    const { removeDir } = require('../../../scripts/lib');
+                    await removeDir(DIST_DIR);
+                    task.output = 'Cleaned AI modules';
+                }
+            })
+        }
+    ]
+};
+
+// Export paths for external use
+module.exports.SRC_DIR = SRC_DIR;
+module.exports.DIST_DIR = DIST_DIR;

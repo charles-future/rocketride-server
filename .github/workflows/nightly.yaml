@@ -1,0 +1,87 @@
+name: Nightly prerelease
+run-name: Nightly ${{ github.event_name == 'workflow_dispatch' && '(manual)' || '(scheduled)' }}
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  init:
+    name: Initialize
+    uses: ./.github/workflows/_init.yaml
+  build:
+    name: Build
+    needs: init
+    uses: ./.github/workflows/_build.yaml
+    with:
+      full_version: ${{ needs.init.outputs.full_server_version }}
+      build_hash: ${{ needs.init.outputs.build_hash }}
+      build_stamp: ${{ needs.init.outputs.build_stamp }}
+      nodownload: true
+      package: true
+      retention_days: 3
+    secrets: inherit
+
+  cleanup-prereleases:
+    name: Clean up prereleases
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete existing prerelease tags and releases
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          TAGS=$(git tag -l '*-prerelease')
+          if [ -z "$TAGS" ]; then
+            echo "No prerelease tags found"
+            exit 0
+          fi
+
+          for TAG in $TAGS; do
+            echo "Deleting release for ${TAG}..."
+            gh release delete "${TAG}" --yes 2>/dev/null || echo "  No release for ${TAG}"
+            echo "Deleting remote tag ${TAG}..."
+            git push origin --delete "${TAG}" 2>/dev/null || echo "  Remote tag ${TAG} not found"
+            echo "Deleting local tag ${TAG}..."
+            git tag -d "${TAG}" 2>/dev/null || echo "  Local tag ${TAG} not found"
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  prerelease:
+    name: Prerelease
+    needs: [init, build, cleanup-prereleases]
+    uses: ./.github/workflows/_release.yaml
+    with:
+      prerelease: true
+      server_version: ${{ needs.init.outputs.server_version }}
+      vscode_version: ${{ needs.init.outputs.vscode_version }}
+      client_mcp_version: ${{ needs.init.outputs.client_mcp_version }}
+      client_python_version: ${{ needs.init.outputs.client_python_version }}
+      client_typescript_version: ${{ needs.init.outputs.client_typescript_version }}
+    secrets: inherit
+
+  docker:
+    name: Docker
+    needs: [init, build]
+    uses: ./.github/workflows/_docker.yaml
+    with:
+      server_version: ${{ needs.init.outputs.server_version }}
+      prerelease: true
+    secrets: inherit
